@@ -1,0 +1,3 @@
+javac -d bin src/escampe/*.java
+
+java -cp bin escampe.ClientJeu escampe.JoueurSuperFort localhost 1234
