@@ -4,56 +4,130 @@ import java.util.*;
 import java.util.concurrent.ThreadLocalRandom;
 
 public class JoueurSuperFort implements IJoueur {
-    private int couleur;
+    private int color;
     private EscampeBoard escampeBoard;
-    private boolean phaseInitiale = true;
-    private final String initPosBottom = "F6/E6/F5/A5/C5/E5";
-    private final String initPosTop = "A1/B1/A2/B2/C2/F2";
+    private boolean isInitialPhase = true;
+    private final String initPosBottom = "F6/E6/F5/C5/D5/B5";
+    private final String initPosTop = "F1/A2/C2/E2/F2/D2";
     private final String[] logNames = {"[SuperFort]", "[Ennemi]"};
-    private final int minMaxDepth = 10;
+    private final int minMaxDepthInGame = 10;
+    private final int minMaxDepthInitPos = 4;
+    private final int nInitPos = 500;
 
     @Override
-    public void initJoueur(int mycolour) {
-        this.couleur = mycolour;
+    public void initJoueur(int myColor) {
+        this.color = myColor;
         this.escampeBoard = new EscampeBoard();
-    }
-
-    @Override
-    public int getNumJoueur() {
-        return couleur;
     }
 
     @Override
     public String choixMouvement() {
         this.printLogsBeforeMove(this.logNames[0]);
 
-        if (phaseInitiale) return initialPhaseMovement();
+        if (isInitialPhase) return initialPhaseMovement();
         else return inGameMovement();
+    }
+
+    public String initialPhaseMovement() {
+        isInitialPhase = false;
+
+        if (this.color == 1) { // If I'm black, I always start
+            this.escampeBoard.play(initPosBottom, this.getCouleurString());
+            this.printLogsAfterMove(this.logNames[0], initPosBottom);
+
+            return initPosBottom; // We arbitrarily choose to start at the bottom as it doesn't matter
+        }
+        else { // If I'm white, I need to check the side black player chose, then place my pawn
+            String blackSide = this.escampeBoard.checkInitSide();
+            List<String> possiblePositions = new ArrayList<>();
+
+            // Génère toutes les positions initiales possibles selon le côté choisi par le noir
+            if (blackSide.equals("Top")) {
+                possiblePositions.add(initPosBottom);
+                possiblePositions.add("F6/E6/F5/C5/D5/B5"); // Position basique 1
+                possiblePositions.add("F6/D6/E5/C5/B5/F5"); // Variante stratégique 1
+                possiblePositions.add("E6/F6/D5/C5/E5/B5"); // Variante stratégique 2
+
+                possiblePositions.addAll(generateRandomInitialPositions(blackSide, nInitPos));
+            }
+            else {
+                possiblePositions.add(initPosTop);
+                possiblePositions.add("F1/A2/C2/E2/F2/D2"); // Position basique 2
+                possiblePositions.add("A1/B1/C2/D2/E2/F2"); // Variante stratégique 3
+                possiblePositions.add("B1/A2/C2/D2/F2/E2"); // Variante stratégique 4
+
+                possiblePositions.addAll(generateRandomInitialPositions(blackSide, nInitPos));
+            }
+
+            String bestPosition = possiblePositions.get(0);
+            int bestScore = Integer.MIN_VALUE;
+
+            // Évaluation MinMax pour chaque configuration possible
+            for (String position : possiblePositions) {
+                EscampeBoard simulated = this.escampeBoard.clone();
+                simulated.play(position, this.getCouleurString());
+
+                int score = minMax(simulated, minMaxDepthInitPos, Integer.MIN_VALUE, Integer.MAX_VALUE, false);
+
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestPosition = position;
+                }
+            }
+
+            this.escampeBoard.play(bestPosition, this.getCouleurString());
+            this.printLogsAfterMove(this.logNames[0], bestPosition);
+
+            return bestPosition;
+        }
+    }
+
+    private List<String> generateRandomInitialPositions(String opponentSide, int count) {
+        List<String> positions = new ArrayList<>();
+        Random rand = new Random();
+
+        for (int i = 0; i < count; i++) {
+            if (opponentSide.equals("Top")) {
+                positions.add(generateInitPosition(rand, 5));
+            } else {
+                positions.add(generateInitPosition(rand, 1));
+            }
+        }
+        return positions;
+    }
+
+    private String generateInitPosition(Random rand, int side) {
+        // Logique de génération aléatoire pour le bas
+        return String.format("%s%d/%s%d/%s%d/%s%d/%s%d/%s%d",
+                (char)('A' + rand.nextInt(6)), rand.nextInt(2) + side,
+                (char)('A' + rand.nextInt(6)), rand.nextInt(2) + side,
+                (char)('A' + rand.nextInt(6)), rand.nextInt(2) + side,
+                (char)('A' + rand.nextInt(6)), rand.nextInt(2) + side,
+                (char)('A' + rand.nextInt(6)), rand.nextInt(2) + side,
+                (char)('A' + rand.nextInt(6)), rand.nextInt(2) + side);
     }
 
     public String inGameMovement() {
         List<String> possibleMoves = this.escampeBoard.possiblesMoves(this.getCouleurString());
         System.out.println("[SuperFort] Movements possibles : " + possibleMoves);
 
-        String chosenMovement = "E";
+        String chosenMove = "E";
         if (!possibleMoves.isEmpty()) {
-            chosenMovement = this.findBestMove(minMaxDepth);
+            chosenMove = this.findBestMove(minMaxDepthInGame);
         }
-        System.out.println("[SuperFort] log mouvement : " + chosenMovement);
+        System.out.println("[SuperFort] log mouvement : " + chosenMove);
 
-        this.escampeBoard.play(chosenMovement, this.getCouleurString());
-        this.printLogsAfterMove(this.logNames[0], chosenMovement);
+        this.escampeBoard.play(chosenMove, this.getCouleurString());
+        this.printLogsAfterMove(this.logNames[0], chosenMove);
 
-        return chosenMovement;
+        return chosenMove;
     }
 
     private String findBestMove(int depth) {
         List<String> moves = this.escampeBoard.possiblesMoves(getCouleurString());
         int bestValue = Integer.MIN_VALUE;
-        int randomIndex = ThreadLocalRandom.current().nextInt(moves.size());
-        // We randomly chose a move from the possible moves in case no move is advantageous
-        String bestMove = moves.get(randomIndex);
-        boolean randomMove = true;
+        boolean isRandomMove = true;
+        List<String> topMoves = new ArrayList<>();
 
         for (String move : moves) {
             EscampeBoard simulated = this.escampeBoard.clone();
@@ -63,14 +137,16 @@ public class JoueurSuperFort implements IJoueur {
 
             if (value > bestValue) {
                 bestValue = value;
-                bestMove = move;
-                randomMove = false;
+                topMoves.clear();
+                topMoves.add(move);
+            } else if (value == bestValue) {
+                topMoves.add(move);
             }
         }
 
-        if (randomMove) System.out.println("=== Random move, algorithm should be upgraded ===");
-
-        return bestMove;
+        System.out.println("========== Top moves length : " + topMoves.size());
+        // Now pick randomly among the best
+        return topMoves.get(ThreadLocalRandom.current().nextInt(topMoves.size()));
     }
 
     private int minMax(EscampeBoard board, int depth, int alpha, int beta, boolean maximizingPlayer) {
@@ -93,8 +169,7 @@ public class JoueurSuperFort implements IJoueur {
             }
 
             return maxEval;
-        }
-        else {
+        } else {
             int minEval = Integer.MAX_VALUE;
 
             for (String move : board.possiblesMoves(getCouleurEnnemiString())) {
@@ -116,55 +191,55 @@ public class JoueurSuperFort implements IJoueur {
         int score = 0;
         String enemy = (player.equals("noir")) ? "blanc" : "noir";
 
-        // 1. Menaces immédiates et critique
-        if (canCaptureLicorne(board, player)) {
-            return Integer.MAX_VALUE - 1; // Coup gagnant
+        // 1. Immediate and critical threats
+        if (canCaptureUnicorn(board, player)) {
+            return Integer.MAX_VALUE - 1; // Winning move
         }
-        if (canCaptureLicorne(board, enemy)) {
-            return Integer.MIN_VALUE + 1; // Défaite imminente
+        if (canCaptureUnicorn(board, enemy)) {
+            return Integer.MIN_VALUE + 1; // Imminent loss
         }
 
-        // 2. Position relative des licornes
-        Position myLicorne = findLicorne(board, player);
-        Position enemyLicorne = findLicorne(board, enemy);
+        // 2. Relative position of unicorns
+        Position myUnicorn = findUnicorn(board, player);
+        Position enemyUnicorn = findUnicorn(board, enemy);
 
-        // 3. Distance des paladins à la licorne ennemie (PRIORITAIRE)
+        // 3. Distance of paladins to enemy unicorn (PRIORITY)
         List<Position> myPaladins = getPaladins(board, player);
         for (Position p : myPaladins) {
-            int dist = optimizedDistance(board, p, enemyLicorne);
-            score += (50 / (dist + 1)); // Bonus exponentiel pour proximité
+            int dist = optimizedDistance(board, p, enemyUnicorn);
+            score += (50 / (dist + 1)); // Exponential bonus for proximity
         }
 
-        // 4. Sécurité de la licorne alliée
+        // 4. Safety of allied unicorn
         List<Position> enemyPaladins = getPaladins(board, enemy);
         for (Position p : enemyPaladins) {
-            int dist = optimizedDistance(board, p, myLicorne);
+            int dist = optimizedDistance(board, p, myUnicorn);
             score -= (30 / (dist + 1));
         }
 
-        // 5. Contrôle des liserés stratégiques
-        int[][] liseres = board.getLiseres();
+        // 5. Control of strategic borders
+        int[][] borders = board.getLiseres();
         for (Position p : myPaladins) {
-            score += liseres[p.row][p.col] * 3;
+            score += borders[p.row][p.col] * 3;
         }
 
-        // 6. Mobilité future (anticipation des contraintes)
-        int nextLisere = board.getLastMoveLisere();
-        score += countAccessibleTiles(board, player, nextLisere) * 2;
+        // 6. Future mobility (anticipation of constraints)
+        int nextBorder = board.getLastMoveLisere();
+        score += countAccessibleTiles(board, player, nextBorder) * 2;
 
         return score;
     }
 
-    private boolean canCaptureLicorne(EscampeBoard board, String player) {
+    private boolean canCaptureUnicorn(EscampeBoard board, String player) {
         String enemy = player.equals("noir") ? "blanc" : "noir";
-        Position enemyLicorne = findLicorne(board, enemy);
-        if (enemyLicorne == null) return true; // Licorne déjà capturée
+        Position enemyUnicorn = findUnicorn(board, enemy);
+        if (enemyUnicorn == null) return true; // Unicorn already captured
 
         List<Position> myPaladins = getPaladins(board, player);
-        String enemyLicornePos = this.positionToNotation(enemyLicorne.row, enemyLicorne.col);
+        String enemyUnicornPos = this.positionToNotation(enemyUnicorn.row, enemyUnicorn.col);
 
         for (Position p : myPaladins) {
-            String move = this.positionToNotation(p.row, p.col) + "-" + enemyLicornePos;
+            String move = this.positionToNotation(p.row, p.col) + "-" + enemyUnicornPos;
             if (board.isValidMove(move, player)) {
                 return true;
             }
@@ -172,7 +247,7 @@ public class JoueurSuperFort implements IJoueur {
         return false;
     }
 
-    private Position findLicorne(EscampeBoard board, String player) {
+    private Position findUnicorn(EscampeBoard board, String player) {
         char target = player.equals("noir") ? 'N' : 'B';
 
         for (int row = 0; row < 6; row++) {
@@ -182,7 +257,7 @@ public class JoueurSuperFort implements IJoueur {
                 }
             }
         }
-        return null; // Si non trouvée (fin de partie)
+        return null; // Not found (end of game)
     }
 
     private List<Position> getPaladins(EscampeBoard board, String player) {
@@ -200,62 +275,71 @@ public class JoueurSuperFort implements IJoueur {
     }
 
     private int findShortestPathLength(EscampeBoard board, Position start, Position end) {
-        Set<Position> visited = new HashSet<>();
+        // Early-out if start == end
+        if (start.equals(end)) return 0;
+
+        boolean[][] visited = new boolean[6][6];
         Queue<Position> queue = new LinkedList<>();
 
         queue.add(start);
-        visited.add(start);
+        visited[start.row][start.col] = true;
 
         int depth = 0;
 
-        while(!queue.isEmpty()) {
-            int levelSize = queue.size(); // Number of nodes at current depth
+        while (!queue.isEmpty()) {
+            depth++;
+            int levelSize = queue.size();
 
             for (int i = 0; i < levelSize; i++) {
                 Position current = queue.poll();
 
-                if (current != null) {
-                    for (Direction dir : Direction.values()) {
-                        Position next = dir.move(current);
+                for (Direction dir : Direction.values()) {
+                    Position next = dir.move(current);
 
-                        if (next.isValid()
-                                && !visited.contains(next)
-                                && board.isNextPosValid(board.getBoardCell(next.row, next.col))
-                                && !visited.contains(next)) {
-
-                            queue.add(next);
-                            visited.add(next);
-                        }
+                    if (!next.isValid()
+                            || visited[next.row][next.col]
+                            || !board.isNextPosValid(board.getBoardCell(next.row, next.col))) {
+                        continue;
                     }
+
+                    // Found the target!
+                    if (next.equals(end)) {
+                        return depth;
+                    }
+
+                    visited[next.row][next.col] = true;
+                    queue.add(next);
                 }
             }
         }
 
-        return depth;
+        // If we exhaust the queue without finding end, no path exists
+        return Integer.MAX_VALUE;
     }
 
+
     private int optimizedDistance(EscampeBoard board, Position a, Position b) {
-        // Combine distance Manhattan et chemin réel
-        int manhattan = Math.abs(a.row - b.row) + Math.abs(a.col - b.col);
-        //int pathLength = findShortestPathLength(board, a, b); // Via BFS
+        // Combine Manhattan distance and actual path
+        //int manhattan = Math.abs(a.row - b.row) + Math.abs(a.col - b.col);
+        int pathLength = findShortestPathLength(board, a, b); // Via BFS
         //return (manhattan + pathLength) / 2;
-        return manhattan;
+        return pathLength;
     }
 
     public String positionToNotation(int row, int col) {
-        // Convertit les coordonnées (row, col) en notation de jeu (ex: 0,0 -> A1)
+        // Converts (row, col) coordinates to game notation (e.g., 0,0 -> A1)
         if (row < 0 || row >= 6 || col < 0 || col >= 6) {
-            throw new IllegalArgumentException("Coordonnées invalides: row=" + row + ", col=" + col);
+            throw new IllegalArgumentException("Invalid coordinates: row=" + row + ", col=" + col);
         }
 
         char columnChar = (char) ('A' + col);
-        int rowNumber = row + 1; // Les lignes sont numérotées de 1 à 6
+        int rowNumber = row + 1;
         return String.valueOf(columnChar) + rowNumber;
     }
 
     public Position notationToPosition(String notation) {
         if (notation == null || notation.length() < 2) {
-            throw new IllegalArgumentException("Format invalide: " + notation);
+            throw new IllegalArgumentException("Invalid format: " + notation);
         }
 
         char colChar = notation.charAt(0);
@@ -264,7 +348,7 @@ public class JoueurSuperFort implements IJoueur {
         int row = Integer.parseInt(notation.substring(1)) - 1;
 
         if (col < 0 || col >= 6 || row < 0 || row >= 6) {
-            throw new IllegalArgumentException("Position hors plateau: " + notation);
+            throw new IllegalArgumentException("Position out of bounds: " + notation);
         }
 
         return new Position(row, col);
@@ -299,26 +383,9 @@ public class JoueurSuperFort implements IJoueur {
         this.printLogsAfterMove(this.logNames[1], coup);
     }
 
-    public String initialPhaseMovement() {
-        phaseInitiale = false;
-
-        if (this.couleur == 1) { // If I'm black I always start
-            this.escampeBoard.play(initPosBottom, this.getCouleurString());
-            this.printLogsAfterMove(this.logNames[0], initPosBottom);
-
-            return initPosBottom; // We arbitrary choose to start at the bottom as it doesn't matter
-        } else { // If I'm white I need to check the side black player chose, then place my pawn
-            if (this.escampeBoard.checkInitSide().equals("Top")) {
-                System.out.println("initialPhaseMovement TOP chosen");
-                this.escampeBoard.play(initPosBottom, this.getCouleurString());
-                this.printLogsAfterMove(this.logNames[0], initPosBottom);
-                return initPosBottom;
-            } else {
-                this.escampeBoard.play(initPosTop, this.getCouleurString());
-                this.printLogsAfterMove(this.logNames[0], initPosTop);
-                return initPosTop;
-            }
-        }
+    @Override
+    public int getNumJoueur() {
+        return color;
     }
 
     public void printLogsBeforeMove(String joueur) {
@@ -334,11 +401,11 @@ public class JoueurSuperFort implements IJoueur {
     }
 
     public String getCouleurString() {
-        return this.couleur == -1 ? "blanc" : "noir";
+        return this.color == -1 ? "blanc" : "noir";
     }
 
     public String getCouleurEnnemiString() {
-        return this.couleur == -1 ? "noir" : "blanc";
+        return this.color == -1 ? "noir" : "blanc";
     }
 
     @Override
