@@ -116,7 +116,7 @@ public class JoueurSuperFort implements IJoueur {
         int score = 0;
         String enemy = (player.equals("noir")) ? "blanc" : "noir";
 
-        // 1. Menaces immédiates (CRITIQUE)
+        // 1. Menaces immédiates et critique
         if (canCaptureLicorne(board, player)) {
             return Integer.MAX_VALUE - 1; // Coup gagnant
         }
@@ -152,13 +152,8 @@ public class JoueurSuperFort implements IJoueur {
         int nextLisere = board.getLastMoveLisere();
         score += countAccessibleTiles(board, player, nextLisere) * 2;
 
-        // 7. Matériel (licorne = 100pts, paladin = 15pts)
-        // Même nombre de pièces, car on ne peut prendre que la licorne adverse ce qui met fin à la partie
-        // score += (countPieces(board, player) - countPieces(board, enemy)) * 15;
-
         return score;
     }
-
 
     private boolean canCaptureLicorne(EscampeBoard board, String player) {
         String enemy = player.equals("noir") ? "blanc" : "noir";
@@ -299,13 +294,9 @@ public class JoueurSuperFort implements IJoueur {
     @Override
     public void mouvementEnnemi(String coup) {
         this.printLogsBeforeMove(this.getCouleurEnnemiString());
-
         System.out.println("[Ennemi] Coup ennemi possibles : " + this.escampeBoard.possiblesMoves(this.getCouleurEnnemiString()));
-        System.out.println("[Ennemi] Coup ennemi reçu : " + coup);
-
         this.escampeBoard.play(coup, this.getCouleurEnnemiString());
-
-        printLogsAfterMove(this.logNames[1], coup);
+        this.printLogsAfterMove(this.logNames[1], coup);
     }
 
     public String initialPhaseMovement() {
@@ -313,18 +304,18 @@ public class JoueurSuperFort implements IJoueur {
 
         if (this.couleur == 1) { // If I'm black I always start
             this.escampeBoard.play(initPosBottom, this.getCouleurString());
-            printLogsAfterMove(this.logNames[0], initPosBottom);
+            this.printLogsAfterMove(this.logNames[0], initPosBottom);
 
             return initPosBottom; // We arbitrary choose to start at the bottom as it doesn't matter
         } else { // If I'm white I need to check the side black player chose, then place my pawn
             if (this.escampeBoard.checkInitSide().equals("Top")) {
                 System.out.println("initialPhaseMovement TOP chosen");
                 this.escampeBoard.play(initPosBottom, this.getCouleurString());
-                printLogsAfterMove(this.logNames[0], initPosBottom);
+                this.printLogsAfterMove(this.logNames[0], initPosBottom);
                 return initPosBottom;
             } else {
                 this.escampeBoard.play(initPosTop, this.getCouleurString());
-                printLogsAfterMove(this.logNames[0], initPosTop);
+                this.printLogsAfterMove(this.logNames[0], initPosTop);
                 return initPosTop;
             }
         }

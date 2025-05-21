@@ -1,3 +1,9 @@
-javac -d bin src/escampe/*.java
+// Server, in src folder
+java -cp escampeobf.jar escampe.ServeurJeu 1234 1
 
+// Random player, in src folder
+java -cp escampeobf.jar escampe.ClientJeu escampe.JoueurAleatoire localhost 1234
+
+// AI player, in project root
+javac -d bin src/escampe/*.java
 java -cp bin escampe.ClientJeu escampe.JoueurSuperFort localhost 1234
