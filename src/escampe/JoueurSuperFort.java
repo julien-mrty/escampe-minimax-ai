@@ -1,5 +1,11 @@
 package escampe;
 
+import java.io.IOException;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.*;
 import java.util.concurrent.ThreadLocalRandom;
 
@@ -10,19 +16,63 @@ public class JoueurSuperFort implements IJoueur {
     private final String initPosBottom = "F6/E6/F5/C5/D5/B5";
     private final String initPosTop = "F1/A2/C2/E2/F2/D2";
     private final String[] logNames = {"[SuperFort]", "[Ennemi]"};
-    private final int minMaxDepthInGame = 10;
-    private final int minMaxDepthInitPos = 4;
-    private final int nInitPos = 500;
+    private final int minMaxDepthInGame = 15;
+    private final int minMaxDepthInitPos = 5;
+    private final int nInitPos = 300;
+
+    // Random 64-bit keys for every piece type × square
+    private final long[][] zobristPaladins = new long[2][36];
+    private final long[]   zobristUnicorns = new long[2]; // one unicorn per side
+    private long           zobristSideToMove;       // random key for side-to-move
+    private long[]         zobristNextBorder = new long[4]; // keys for each border constraint (-1, 1, 2, 3)
+
+    // Our cache: zobristHash → TTEntry
+    private final Map<Long,TTEntry> transpositionTable = new HashMap<>();
+
+    // Define a constant for your cache file under src/
+    private static final Path CACHE_FILE = Paths.get("src", "transpositionTable.bin");
 
     @Override
     public void initJoueur(int myColor) {
-        this.color = myColor;
-        this.escampeBoard = new EscampeBoard();
+        color = myColor;
+        escampeBoard = new EscampeBoard();
+
+        // Ensure the parent directory exists (src/ is there, but if you nest deeper, create)
+        try {
+            Files.createDirectories(CACHE_FILE.getParent());
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+
+        // Initialize your Zobrist keys (or load from disk if the file already exists)
+        initZobrist();
+        loadCacheFromDisk();      // will no-op if file missing
+    }
+
+    @Override
+    public void declareLeVainqueur(int colour) {
+        System.out.println("[SuperFort] Vainqueur : " + (colour == BLANC ? "Blanc" : "Noir"));
+        saveCacheToDisk();
+    }
+
+    private void initZobrist() {
+        Random rnd = new Random(123456);  // fixed seed for reproducibility
+        for(int side=0; side<2; side++){
+            for(int sq=0; sq<36; sq++){
+                zobristPaladins[side][sq] = rnd.nextLong();
+            }
+            zobristUnicorns[side] = rnd.nextLong();
+        }
+
+        zobristSideToMove = rnd.nextLong();
+        for (int i = 0; i < zobristNextBorder.length; i++) {
+            zobristNextBorder[i] = rnd.nextLong();
+        }
     }
 
     @Override
     public String choixMouvement() {
-        this.printLogsBeforeMove(this.logNames[0]);
+        printLogsBeforeMove(logNames[0]);
 
         if (isInitialPhase) return initialPhaseMovement();
         else return inGameMovement();
@@ -31,14 +81,14 @@ public class JoueurSuperFort implements IJoueur {
     public String initialPhaseMovement() {
         isInitialPhase = false;
 
-        if (this.color == 1) { // If I'm black, I always start
-            this.escampeBoard.play(initPosBottom, this.getCouleurString());
-            this.printLogsAfterMove(this.logNames[0], initPosBottom);
+        if (color == 1) { // If I'm black, I always start
+            escampeBoard.play(initPosBottom, getCouleurString());
+            printLogsAfterMove(logNames[0], initPosBottom);
 
             return initPosBottom; // We arbitrarily choose to start at the bottom as it doesn't matter
         }
         else { // If I'm white, I need to check the side black player chose, then place my pawn
-            String blackSide = this.escampeBoard.checkInitSide();
+            String blackSide = escampeBoard.checkInitSide();
             List<String> possiblePositions = new ArrayList<>();
 
             // Génère toutes les positions initiales possibles selon le côté choisi par le noir
@@ -64,8 +114,8 @@ public class JoueurSuperFort implements IJoueur {
 
             // Évaluation MinMax pour chaque configuration possible
             for (String position : possiblePositions) {
-                EscampeBoard simulated = this.escampeBoard.clone();
-                simulated.play(position, this.getCouleurString());
+                EscampeBoard simulated = escampeBoard.clone();
+                simulated.play(position, getCouleurString());
 
                 int score = minMax(simulated, minMaxDepthInitPos, Integer.MIN_VALUE, Integer.MAX_VALUE, false);
 
@@ -75,10 +125,74 @@ public class JoueurSuperFort implements IJoueur {
                 }
             }
 
-            this.escampeBoard.play(bestPosition, this.getCouleurString());
-            this.printLogsAfterMove(this.logNames[0], bestPosition);
+            escampeBoard.play(bestPosition, getCouleurString());
+            printLogsAfterMove(logNames[0], bestPosition);
 
             return bestPosition;
+        }
+    }
+
+    long computeZobrist(EscampeBoard board, String playerToMove) {
+        long h = 0L;
+        // piece bitboards
+        for (int row = 0; row < 6; row++) {
+            for (int col = 0; col < 6; col++) {
+                int sq = row*6 + col;
+                char c = board.getBoardCell(row, col);
+                switch(c) {
+                    case 'n': h ^= zobristPaladins[0][sq]; break;
+                    case 'b': h ^= zobristPaladins[1][sq]; break;
+                    case 'N': h ^= zobristUnicorns[0];      break;
+                    case 'B': h ^= zobristUnicorns[1];      break;
+                }
+            }
+        }
+
+        // side to move
+        if (playerToMove.equals("blanc")) {
+            h ^= zobristSideToMove;
+        }
+
+        // next-border constraint
+        int next = board.getLastMoveLisere();
+        if (next == -1) next = 0; // if there is no current border, say its tag is 0
+        h ^= zobristNextBorder[next];
+        return h;
+    }
+
+    @SuppressWarnings("unchecked")
+    private void loadCacheFromDisk() {
+        if (!Files.exists(CACHE_FILE)) return;  // first run: nothing to load
+
+        try (ObjectInputStream in = new ObjectInputStream(
+                Files.newInputStream(CACHE_FILE))) {
+            // Read in the same order you saved:
+            long[][] loadedPal = (long[][]) in.readObject();
+            long[]   loadedUni = (long[])   in.readObject();
+            Map<Long,TTEntry> loadedTable = (Map<Long,TTEntry>) in.readObject();
+
+            // Overwrite your in-memory fields
+            for (int i = 0; i < zobristPaladins.length; i++) {
+                System.arraycopy(loadedPal[i], 0, zobristPaladins[i], 0, 36);
+            }
+            System.arraycopy(loadedUni, 0, zobristUnicorns, 0, 2);
+
+            transpositionTable.clear();
+            transpositionTable.putAll(loadedTable);
+        } catch (IOException|ClassNotFoundException e) {
+            System.err.println("Warning: could not load TT cache, starting fresh: " + e);
+        }
+    }
+
+    private void saveCacheToDisk() {
+        try (ObjectOutputStream out = new ObjectOutputStream(
+                Files.newOutputStream(CACHE_FILE))) {
+            // Write in the same order you read them back
+            out.writeObject(zobristPaladins);
+            out.writeObject(zobristUnicorns);
+            out.writeObject(transpositionTable);
+        } catch (IOException e) {
+            System.err.println("Error saving TT cache: " + e);
         }
     }
 
@@ -108,29 +222,28 @@ public class JoueurSuperFort implements IJoueur {
     }
 
     public String inGameMovement() {
-        List<String> possibleMoves = this.escampeBoard.possiblesMoves(this.getCouleurString());
+        List<String> possibleMoves = escampeBoard.possiblesMoves(getCouleurString());
         System.out.println("[SuperFort] Movements possibles : " + possibleMoves);
 
         String chosenMove = "E";
         if (!possibleMoves.isEmpty()) {
-            chosenMove = this.findBestMove(minMaxDepthInGame);
+            chosenMove = findBestMove(minMaxDepthInGame);
         }
-        System.out.println("[SuperFort] log mouvement : " + chosenMove);
-
-        this.escampeBoard.play(chosenMove, this.getCouleurString());
-        this.printLogsAfterMove(this.logNames[0], chosenMove);
+        
+        escampeBoard.play(chosenMove, getCouleurString());
+        printLogsAfterMove(logNames[0], chosenMove);
 
         return chosenMove;
     }
 
     private String findBestMove(int depth) {
-        List<String> moves = this.escampeBoard.possiblesMoves(getCouleurString());
+        List<String> moves = escampeBoard.possiblesMoves(getCouleurString());
         int bestValue = Integer.MIN_VALUE;
         boolean isRandomMove = true;
         List<String> topMoves = new ArrayList<>();
 
         for (String move : moves) {
-            EscampeBoard simulated = this.escampeBoard.clone();
+            EscampeBoard simulated = escampeBoard.clone();
             simulated.play(move, getCouleurString());
 
             int value = minMax(simulated, depth - 1, Integer.MIN_VALUE, Integer.MAX_VALUE, false);
@@ -150,80 +263,119 @@ public class JoueurSuperFort implements IJoueur {
     }
 
     private int minMax(EscampeBoard board, int depth, int alpha, int beta, boolean maximizingPlayer) {
+        long zobrist = computeZobrist(board, String.valueOf(maximizingPlayer));
+        TTEntry entry = transpositionTable.get(zobrist);
+
+        if (entry != null && entry.depth >= depth) {
+            // use cached value
+            if (entry.flag == 0) return entry.value; // exact
+            if (entry.flag < 0 && entry.value <= alpha) return entry.value; // alpha-bound
+            if (entry.flag > 0 && entry.value >= beta)  return entry.value; // beta-bound
+        }
+
+        int originalAlpha = alpha;
+        int value;
         if (depth == 0 || board.gameOver()) {
             return evaluate(board, getCouleurString());
         }
-
-        if (maximizingPlayer) {
-            int maxEval = Integer.MIN_VALUE;
+        else if (maximizingPlayer) {
+            value = Integer.MIN_VALUE;
 
             for (String move : board.possiblesMoves(getCouleurString())) {
                 EscampeBoard simulated = board.clone();
                 simulated.play(move, getCouleurString());
 
-                int eval = minMax(simulated, depth - 1, alpha, beta, false);
-
-                maxEval = Math.max(maxEval, eval);
-                alpha = Math.max(alpha, eval);
+                value = Math.max(value, minMax(simulated, depth - 1, alpha, beta, false));
+                alpha = Math.max(alpha, value);
                 if (beta <= alpha) break;
             }
-
-            return maxEval;
-        } else {
-            int minEval = Integer.MAX_VALUE;
+        }
+        else {
+            value = Integer.MAX_VALUE;
 
             for (String move : board.possiblesMoves(getCouleurEnnemiString())) {
                 EscampeBoard simulated = board.clone();
                 simulated.play(move, getCouleurEnnemiString());
 
-                int eval = minMax(simulated, depth - 1, alpha, beta, true);
-
-                minEval = Math.min(minEval, eval);
-                beta = Math.min(beta, eval);
+                value = Math.min(value, minMax(simulated, depth - 1, alpha, beta, true));
+                beta = Math.min(beta, value);
                 if (beta <= alpha) break;
             }
-
-            return minEval;
         }
+
+        // Store in table
+        TTEntry newEntry = new TTEntry();
+        newEntry.depth = depth;
+        newEntry.value = value;
+        newEntry.bestMove = null; // you could track the PV here if desired
+        if (value <= originalAlpha) newEntry.flag = -1; // upper bound
+        else if (value >= beta)      newEntry.flag = +1; // lower bound
+        else                         newEntry.flag = 0; // exact
+        transpositionTable.put(zobrist, newEntry);
+
+        return value;
     }
 
     private int evaluate(EscampeBoard board, String player) {
         int score = 0;
-        String enemy = (player.equals("noir")) ? "blanc" : "noir";
+        String enemy = player.equals("noir") ? "blanc" : "noir";
 
-        // 1. Immediate and critical threats
-        if (canCaptureUnicorn(board, player)) {
-            return Integer.MAX_VALUE - 1; // Winning move
-        }
-        if (canCaptureUnicorn(board, enemy)) {
-            return Integer.MIN_VALUE + 1; // Imminent loss
-        }
+        // Immediate win/loss
+        if (canCaptureUnicorn(board, player)) return Integer.MAX_VALUE - 1;
+        if (canCaptureUnicorn(board, enemy)) return Integer.MIN_VALUE + 1;
 
-        // 2. Relative position of unicorns
+        // Locate pieces
         Position myUnicorn = findUnicorn(board, player);
         Position enemyUnicorn = findUnicorn(board, enemy);
-
-        // 3. Distance of paladins to enemy unicorn (PRIORITY)
         List<Position> myPaladins = getPaladins(board, player);
+        List<Position> enemyPaladins = getPaladins(board, enemy);
+
+        // Mobility differential: compare accessible moves count
+        int myMobility = board.possiblesMoves(player).size();
+        int enemyMobility = board.possiblesMoves(enemy).size();
+        score += (myMobility - enemyMobility) * 5;
+
+        // Threat distance: sum of distances of paladins to focus on unicorn
+        int myThreatSum = 0;
+        for (Position p : myPaladins) {
+            myThreatSum += optimizedDistance(board, p, enemyUnicorn);
+        }
+        int enemyThreatSum = 0;
+        for (Position p : enemyPaladins) {
+            enemyThreatSum += optimizedDistance(board, p, myUnicorn);
+        }
+        // reward smaller myThreatSum, penalize smaller enemyThreatSum
+        score += (enemyThreatSum - myThreatSum) * 2;
+
+        // Piece safety zones: discourage unicorn near high-value border if enemy paladin close
+        int[][] borders = board.getLiseres();
+        int myUnicornValue = borders[myUnicorn.row][myUnicorn.col];
+        // find min distance from any enemy paladin
+        int minDistEnemyToMyUni = Integer.MAX_VALUE;
+        for (Position p : enemyPaladins) {
+            int d = optimizedDistance(board, p, myUnicorn);
+            minDistEnemyToMyUni = Math.min(minDistEnemyToMyUni, d);
+        }
+        // if enemy is close (<3), heavy penalty on high-value border
+        if (minDistEnemyToMyUni < 3) {
+            score -= myUnicornValue * 8;
+        }
+
+        // Paladin proximity to enemy unicorn
         for (Position p : myPaladins) {
             int dist = optimizedDistance(board, p, enemyUnicorn);
-            score += (50 / (dist + 1)); // Exponential bonus for proximity
+            score += 50 / (dist + 1);
         }
-
-        // 4. Safety of allied unicorn
-        List<Position> enemyPaladins = getPaladins(board, enemy);
+        // Safety of allied unicorn from enemy paladins
         for (Position p : enemyPaladins) {
             int dist = optimizedDistance(board, p, myUnicorn);
-            score -= (30 / (dist + 1));
+            score -= 30 / (dist + 1);
         }
-
-        // 5. Control of strategic borders
-        int[][] borders = board.getLiseres();
+        // Control of strategic borders
         for (Position p : myPaladins) {
             score += borders[p.row][p.col] * 3;
         }
-
-        // 6. Future mobility (anticipation of constraints)
+        // Future mobility
         int nextBorder = board.getLastMoveLisere();
         score += countAccessibleTiles(board, player, nextBorder) * 2;
 
@@ -236,10 +388,10 @@ public class JoueurSuperFort implements IJoueur {
         if (enemyUnicorn == null) return true; // Unicorn already captured
 
         List<Position> myPaladins = getPaladins(board, player);
-        String enemyUnicornPos = this.positionToNotation(enemyUnicorn.row, enemyUnicorn.col);
+        String enemyUnicornPos = positionToNotation(enemyUnicorn.row, enemyUnicorn.col);
 
         for (Position p : myPaladins) {
-            String move = this.positionToNotation(p.row, p.col) + "-" + enemyUnicornPos;
+            String move = positionToNotation(p.row, p.col) + "-" + enemyUnicornPos;
             if (board.isValidMove(move, player)) {
                 return true;
             }
@@ -317,7 +469,6 @@ public class JoueurSuperFort implements IJoueur {
         return Integer.MAX_VALUE;
     }
 
-
     private int optimizedDistance(EscampeBoard board, Position a, Position b) {
         // Combine Manhattan distance and actual path
         //int manhattan = Math.abs(a.row - b.row) + Math.abs(a.col - b.col);
@@ -370,17 +521,14 @@ public class JoueurSuperFort implements IJoueur {
         return score;
     }
 
-    @Override
-    public void declareLeVainqueur(int colour) {
-        System.out.println("[SuperFort] Vainqueur : " + (colour == BLANC ? "Blanc" : "Noir"));
-    }
+
 
     @Override
     public void mouvementEnnemi(String coup) {
-        this.printLogsBeforeMove(this.getCouleurEnnemiString());
-        System.out.println("[Ennemi] Coup ennemi possibles : " + this.escampeBoard.possiblesMoves(this.getCouleurEnnemiString()));
-        this.escampeBoard.play(coup, this.getCouleurEnnemiString());
-        this.printLogsAfterMove(this.logNames[1], coup);
+        printLogsBeforeMove(getCouleurEnnemiString());
+        System.out.println("[Ennemi] Coup ennemi possibles : " + escampeBoard.possiblesMoves(getCouleurEnnemiString()));
+        escampeBoard.play(coup, getCouleurEnnemiString());
+        printLogsAfterMove(logNames[1], coup);
     }
 
     @Override
@@ -390,22 +538,22 @@ public class JoueurSuperFort implements IJoueur {
 
     public void printLogsBeforeMove(String joueur) {
         System.out.println(joueur + " Plateau avant le coup :");
-        this.escampeBoard.printBoard();
+        escampeBoard.printBoard();
     }
 
     public void printLogsAfterMove(String joueur, String coup) {
         System.out.println(joueur + " Coup choisi : " + coup);
         System.out.println(joueur + " Plateau après le coup :");
-        this.escampeBoard.printBoard();
+        escampeBoard.printBoard();
         System.out.println();
     }
 
     public String getCouleurString() {
-        return this.color == -1 ? "blanc" : "noir";
+        return color == -1 ? "blanc" : "noir";
     }
 
     public String getCouleurEnnemiString() {
-        return this.color == -1 ? "noir" : "blanc";
+        return color == -1 ? "noir" : "blanc";
     }
 
     @Override
