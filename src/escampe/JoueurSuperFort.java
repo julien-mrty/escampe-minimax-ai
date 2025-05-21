@@ -16,7 +16,7 @@ public class JoueurSuperFort implements IJoueur {
     private final String initPosBottom = "F6/E6/F5/C5/D5/B5";
     private final String initPosTop = "F1/A2/C2/E2/F2/D2";
     private final String[] logNames = {"[SuperFort]", "[Ennemi]"};
-    private final int minMaxDepthInGame = 15;
+    private final int minMaxDepthInGame = 10;
     private final int minMaxDepthInitPos = 5;
     private final int nInitPos = 300;
 
@@ -36,23 +36,12 @@ public class JoueurSuperFort implements IJoueur {
     public void initJoueur(int myColor) {
         color = myColor;
         escampeBoard = new EscampeBoard();
-
-        // Ensure the parent directory exists (src/ is there, but if you nest deeper, create)
-        try {
-            Files.createDirectories(CACHE_FILE.getParent());
-        } catch (IOException e) {
-            throw new RuntimeException(e);
-        }
-
-        // Initialize your Zobrist keys (or load from disk if the file already exists)
         initZobrist();
-        loadCacheFromDisk();      // will no-op if file missing
     }
 
     @Override
     public void declareLeVainqueur(int colour) {
         System.out.println("[SuperFort] Vainqueur : " + (colour == BLANC ? "Blanc" : "Noir"));
-        saveCacheToDisk();
     }
 
     private void initZobrist() {
@@ -160,42 +149,6 @@ public class JoueurSuperFort implements IJoueur {
         return h;
     }
 
-    @SuppressWarnings("unchecked")
-    private void loadCacheFromDisk() {
-        if (!Files.exists(CACHE_FILE)) return;  // first run: nothing to load
-
-        try (ObjectInputStream in = new ObjectInputStream(
-                Files.newInputStream(CACHE_FILE))) {
-            // Read in the same order you saved:
-            long[][] loadedPal = (long[][]) in.readObject();
-            long[]   loadedUni = (long[])   in.readObject();
-            Map<Long,TTEntry> loadedTable = (Map<Long,TTEntry>) in.readObject();
-
-            // Overwrite your in-memory fields
-            for (int i = 0; i < zobristPaladins.length; i++) {
-                System.arraycopy(loadedPal[i], 0, zobristPaladins[i], 0, 36);
-            }
-            System.arraycopy(loadedUni, 0, zobristUnicorns, 0, 2);
-
-            transpositionTable.clear();
-            transpositionTable.putAll(loadedTable);
-        } catch (IOException|ClassNotFoundException e) {
-            System.err.println("Warning: could not load TT cache, starting fresh: " + e);
-        }
-    }
-
-    private void saveCacheToDisk() {
-        try (ObjectOutputStream out = new ObjectOutputStream(
-                Files.newOutputStream(CACHE_FILE))) {
-            // Write in the same order you read them back
-            out.writeObject(zobristPaladins);
-            out.writeObject(zobristUnicorns);
-            out.writeObject(transpositionTable);
-        } catch (IOException e) {
-            System.err.println("Error saving TT cache: " + e);
-        }
-    }
-
     private List<String> generateRandomInitialPositions(String opponentSide, int count) {
         List<String> positions = new ArrayList<>();
         Random rand = new Random();
@@ -229,7 +182,7 @@ public class JoueurSuperFort implements IJoueur {
         if (!possibleMoves.isEmpty()) {
             chosenMove = findBestMove(minMaxDepthInGame);
         }
-        
+
         escampeBoard.play(chosenMove, getCouleurString());
         printLogsAfterMove(logNames[0], chosenMove);
 
