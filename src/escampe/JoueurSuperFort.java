@@ -1,11 +1,5 @@
 package escampe;
 
-import java.io.IOException;
-import java.io.ObjectInputStream;
-import java.io.ObjectOutputStream;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.*;
 import java.util.concurrent.ThreadLocalRandom;
 
@@ -28,9 +22,6 @@ public class JoueurSuperFort implements IJoueur {
 
     // Our cache: zobristHash → TTEntry
     private final Map<Long,TTEntry> transpositionTable = new HashMap<>();
-
-    // Define a constant for your cache file under src/
-    private static final Path CACHE_FILE = Paths.get("src", "transpositionTable.bin");
 
     @Override
     public void initJoueur(int myColor) {
@@ -192,7 +183,6 @@ public class JoueurSuperFort implements IJoueur {
     private String findBestMove(int depth) {
         List<String> moves = escampeBoard.possiblesMoves(getCouleurString());
         int bestValue = Integer.MIN_VALUE;
-        boolean isRandomMove = true;
         List<String> topMoves = new ArrayList<>();
 
         for (String move : moves) {
@@ -262,7 +252,7 @@ public class JoueurSuperFort implements IJoueur {
         newEntry.value = value;
         newEntry.bestMove = null; // you could track the PV here if desired
         if (value <= originalAlpha) newEntry.flag = -1; // upper bound
-        else if (value >= beta)      newEntry.flag = +1; // lower bound
+        else if (value >= beta)      newEntry.flag = 1; // lower bound
         else                         newEntry.flag = 0; // exact
         transpositionTable.put(zobrist, newEntry);
 
@@ -379,7 +369,7 @@ public class JoueurSuperFort implements IJoueur {
         return paladins;
     }
 
-    private int findShortestPathLength(EscampeBoard board, Position start, Position end) {
+    private int findShortestPathLengthBFS(EscampeBoard board, Position start, Position end) {
         // Early-out if start == end
         if (start.equals(end)) return 0;
 
@@ -423,11 +413,7 @@ public class JoueurSuperFort implements IJoueur {
     }
 
     private int optimizedDistance(EscampeBoard board, Position a, Position b) {
-        // Combine Manhattan distance and actual path
-        //int manhattan = Math.abs(a.row - b.row) + Math.abs(a.col - b.col);
-        int pathLength = findShortestPathLength(board, a, b); // Via BFS
-        //return (manhattan + pathLength) / 2;
-        return pathLength;
+        return findShortestPathLengthBFS(board, a, b);
     }
 
     public String positionToNotation(int row, int col) {
